@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/outfit';
+@plugin '@tailwindcss/typography';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../views';
+
+/*
+ * Solution Netmobile — design tokens.
+ * Brand colors are defined only here (public site); the Filament panel reads config/site.php.
+ */
+@theme {
+    --font-sans: 'Outfit Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+
+    --color-brand-50: #F3F7FF;
+    --color-brand-100: #EAF2FF;
+    --color-brand-200: #CFE0FB;
+    --color-brand-300: #9DC0F3;
+    --color-brand-400: #4F8FE6;
+    --color-brand-500: #1674DB;
+    --color-brand-600: #0755C8;
+    --color-brand-700: #0646A6;
+    --color-brand-800: #083A85;
+    --color-night: #07133D;
+    --color-muted: #667085;
+
+    --radius-card: 0.875rem;
+    --shadow-card: 0 1px 2px rgb(7 19 61 / 0.04), 0 8px 24px -12px rgb(7 85 200 / 0.18);
+    --shadow-card-hover: 0 2px 4px rgb(7 19 61 / 0.05), 0 18px 40px -16px rgb(7 85 200 / 0.32);
+
+    --animate-fade-up: fade-up 0.6s ease-out both;
+
+    @keyframes fade-up {
+        from {
+            opacity: 0;
+            transform: translateY(14px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+}
+
+@layer base {
+    html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 5.5rem;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+        @apply bg-white font-sans text-night antialiased;
+    }
+
+    :focus-visible {
+        @apply outline-2 outline-offset-2 outline-brand-600;
+    }
+
+    [x-cloak] {
+        display: none !important;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        html {
+            scroll-behavior: auto;
+        }
+
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+}
+
+@layer components {
+    .container-site {
+        @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-10;
+    }
+
+    .kicker {
+        @apply inline-flex items-center gap-3 text-xs font-semibold tracking-[0.18em] text-night uppercase sm:text-sm;
+    }
+
+    .kicker::before {
+        content: '';
+        @apply block h-px w-8 bg-brand-600;
+    }
+
+    .form-input {
+        @apply block w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-base text-night placeholder:text-slate-400 transition focus:border-brand-500 focus:ring-4 focus:ring-brand-100 focus:outline-none;
+    }
+
+    .form-input[aria-invalid='true'] {
+        @apply border-red-400 focus:border-red-500 focus:ring-red-100;
+    }
+
+    .form-label {
+        @apply mb-1.5 block text-sm font-medium text-night;
+    }
+
+    .form-error {
+        @apply mt-1.5 text-sm text-red-600;
+    }
+}
