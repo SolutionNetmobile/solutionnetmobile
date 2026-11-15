@@ -71,11 +71,11 @@ jobs:
       - name: Assets (Vite)
         run: npm run build
 
+      # APP_KEY est fournie par l'étape « Clé d'application de test » (variable d'environnement)
       - name: Environnement de test
         run: |
           cp .env.example .env
           sed -i 's/^DB_PORT=.*/DB_PORT=3306/; s/^DB_USERNAME=.*/DB_USERNAME=root/; s/^DB_PASSWORD=.*/DB_PASSWORD=root/' .env
-          php artisan key:generate
 
       - name: Formatage (Pint)
         run: vendor/bin/pint --test
