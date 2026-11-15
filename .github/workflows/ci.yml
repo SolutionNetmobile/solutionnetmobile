@@ -1,0 +1,84 @@
+# Contrôle qualité : formatage, tests (MariaDB) et construction des assets.
+# Lancé à chaque push sur dev / prod et sur chaque pull request. Pour la branche recette,
+# c'est le workflow de déploiement qui l'appelle avant de publier.
+name: CI
+
+on:
+  push:
+    branches: [dev, prod]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualite:
+    name: Qualité et tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: solution_netmobile_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, ctype, curl, dom, fileinfo, gd, intl, mbstring, openssl, pdo_mysql, tokenizer, xml, zip
+          ini-values: memory_limit=1G
+          coverage: none
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Cache Composer
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.composer/cache/files
+          key: composer-${{ hashFiles('composer.lock') }}
+
+      # Clé jetable : l'application démarre dès « composer install » (package:discover)
+      # et le panneau Filament exige APP_KEY. Ne sert qu'aux tests.
+      - name: Clé d'application de test
+        run: echo "APP_KEY=base64:$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Dépendances
+        env:
+          CACHE_STORE: array
+        run: |
+          composer install --prefer-dist --no-interaction --no-progress
+          npm ci
+
+      - name: Assets (Vite)
+        run: npm run build
+
+      - name: Environnement de test
+        run: |
+          cp .env.example .env
+          sed -i 's/^DB_PORT=.*/DB_PORT=3306/; s/^DB_USERNAME=.*/DB_USERNAME=root/; s/^DB_PASSWORD=.*/DB_PASSWORD=root/' .env
+          php artisan key:generate
+
+      - name: Formatage (Pint)
+        run: vendor/bin/pint --test
+
+      - name: Tests (PHPUnit)
+        run: php artisan test

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# =============================================================================
+# netmobile-ssh-gate — seule commande autorisée pour la clé SSH de GitHub Actions.
+#
+# authorized_keys de l'utilisateur deploy :
+#   restrict,command="/usr/local/bin/netmobile-ssh-gate recette" ssh-ed25519 AAAA… gha_netmobile_recette
+#
+# La clé ne peut lancer que deploy / rollback / status de SON environnement.
+# =============================================================================
+set -euo pipefail
+
+ENV_NAME="${1:-}"
+read -r -a ARGS <<< "${SSH_ORIGINAL_COMMAND:-}"
+
+case "$ENV_NAME" in
+  recette) ;;
+  *) echo "Environnement non autorisé." >&2; exit 2 ;;
+esac
+
+case "${ARGS[0]:-}" in
+  deploy)
+    SHA="${ARGS[1]:-}"
+    if [ -n "$SHA" ] && ! [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+      echo "Identifiant de commit invalide." >&2
+      exit 2
+    fi
+    exec sudo /usr/local/bin/netmobile-deploy "$ENV_NAME" deploy ${SHA:+"$SHA"}
+    ;;
+  rollback|status)
+    exec sudo /usr/local/bin/netmobile-deploy "$ENV_NAME" "${ARGS[0]}"
+    ;;
+  *)
+    echo "Commande refusée. Autorisées : deploy [sha], rollback, status." >&2
+    exit 2
+    ;;
+esac

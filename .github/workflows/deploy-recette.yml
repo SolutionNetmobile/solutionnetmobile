@@ -1,0 +1,80 @@
+# Déploiement de la RECETTE (https://recette.solution-netmobile.fr) à chaque push sur la branche « recette ».
+#
+# Même principe que Private VTC : le serveur récupère lui-même la branche « recette » depuis GitHub
+# et la déploie (script netmobile-deploy, voir deploy/server/). Aucun code n'est envoyé par ce workflow.
+# La clé SSH utilisée est bridée côté serveur : elle ne peut déclencher QUE le déploiement de cette recette.
+#
+# Activation (une fois) : voir docs/DEPLOIEMENT.md § « Recette ».
+#   - environnement GitHub « recette » (branche autorisée : recette) avec les secrets
+#     SSH_HOST, SSH_PRIVATE_KEY, SSH_KNOWN_HOSTS et, facultatif, HEALTH_BASIC_AUTH (utilisateur:motdepasse)
+#   - variable de dépôt DEPLOY_RECETTE_ENABLED = true (sinon seuls les tests s'exécutent)
+name: Déploiement recette
+
+on:
+  push:
+    branches: [recette]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un seul déploiement recette à la fois (le serveur pose aussi un verrou)
+concurrency:
+  group: deploy-recette
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Déployer sur la recette
+    needs: tests
+    if: vars.DEPLOY_RECETTE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: recette
+      url: https://recette.solution-netmobile.fr
+
+    steps:
+      - name: Vérifier la branche
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/recette" ]; then
+            echo "::error::Ce workflow ne déploie que la branche recette (reçu : ${GITHUB_REF})"
+            exit 1
+          fi
+
+      - name: Clé SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Déployer (build, migrations, contrôle de santé, bascule)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "deploy@${SSH_HOST}" "deploy ${GITHUB_SHA}"
+
+      - name: Contrôle public
+        env:
+          HEALTH_BASIC_AUTH: ${{ secrets.HEALTH_BASIC_AUTH }}
+        run: |
+          URL=https://recette.solution-netmobile.fr
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/")
+          echo "Sans identifiants : HTTP $code (attendu 401)"
+          [ "$code" = "401" ] || { echo "::error::La recette n'est pas protégée par mot de passe"; exit 1; }
+          if [ -n "${HEALTH_BASIC_AUTH}" ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' -u "${HEALTH_BASIC_AUTH}" "$URL/up")
+            echo "Avec identifiants, /up : HTTP $code (attendu 200)"
+            [ "$code" = "200" ] || { echo "::error::$URL/up ne répond pas 200"; exit 1; }
+          fi
+
+      - name: Nettoyage
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

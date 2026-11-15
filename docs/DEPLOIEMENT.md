@@ -1,3 +1,67 @@
+# Déploiement
+
+## Recette — https://recette.solution-netmobile.fr
+
+Même organisation que Private VTC, sur le même serveur. Toutes les ressources sont dédiées :
+aucun réglage de Private VTC n'est modifié.
+
+| Élément | Valeur |
+|---|---|
+| Branche | `recette` |
+| Répertoire | `/var/www/netmobile/recette` (`releases/`, `shared/.env`, `shared/storage`, `backups/`, lien `current`) |
+| Utilisateur système / pool PHP-FPM | `netmobile-recette` (`/run/php/netmobile-recette.sock`) |
+| Base MariaDB | `solution_netmobile_recette` (utilisateur `netmobile_recette`) |
+| Accès | mot de passe HTTP (`/etc/nginx/htpasswd/netmobile-recette`), `noindex`, `APP_ENV=staging` |
+| Scripts | `/usr/local/bin/netmobile-deploy`, `/usr/local/bin/netmobile-ssh-gate` (sources : `deploy/server/`) |
+
+### Principe
+
+Un push sur `recette` lance `.github/workflows/deploy-recette.yml` :
+
+1. Les tests sont lancés (`ci.yml` : Pint, PHPUnit sur MariaDB, build Vite).
+2. GitHub se connecte en SSH avec `deploy@serveur "deploy <sha>"`. La clé est bridée par `netmobile-ssh-gate recette`.
+3. Le serveur exécute `netmobile-deploy` :
+   - verrou et récupération de la branche `recette` depuis GitHub ;
+   - création d'une nouvelle release ;
+   - `composer install --no-dev`, puis `npm ci && npm run build` ;
+   - sauvegarde de la base, migrations, données initiales au premier déploiement ;
+   - mise en cache (`optimize`, `filament:optimize`) ;
+   - **contrôle de santé de la nouvelle release avant sa mise en ligne** ;
+   - bascule atomique de `current` ;
+   - contrôle public, avec **retour automatique** à la version précédente en cas d'échec ;
+   - conservation des 5 dernières releases.
+4. Contrôle public : `/` doit répondre 401 sans mot de passe, et `/up` 200 avec le mot de passe.
+
+### Installation sur le serveur (une seule fois)
+
+```bash
+git clone --branch recette https://github.com/SolutionNetmobile/solutionnetmobile.git /tmp/netmobile
+sudo bash /tmp/netmobile/deploy/server/install-recette.sh
+```
+
+Le script :
+
+1. crée l'utilisateur, la base, le fichier `.env` partagé, le pool PHP-FPM, le mot de passe HTTP, le certificat Let's Encrypt, le vhost Nginx, la tâche cron et la clé SSH bridée ;
+2. vérifie `nginx -t` et `php-fpm -t` avant chaque rechargement ;
+3. affiche à la fin les valeurs à copier dans GitHub, ainsi que les identifiants de l'administrateur et de l'accès HTTP.
+
+Il reste ensuite à :
+
+1. compléter les réglages SMTP (`MAIL_*`) dans `/var/www/netmobile/recette/shared/.env` ;
+2. dans GitHub, ouvrir **Settings › Environments › recette** et ajouter les secrets `SSH_HOST`, `SSH_KNOWN_HOSTS`, `SSH_PRIVATE_KEY` et `HEALTH_BASIC_AUTH`. Supprimer ensuite la clé privée du serveur ;
+3. dans **Settings › Secrets and variables › Actions › Variables**, créer `DEPLOY_RECETTE_ENABLED` = `true`.
+
+### Publier
+
+```bash
+git checkout recette && git merge --ff-only dev && git push origin recette
+```
+
+Retour arrière : `sudo -u deploy sudo netmobile-deploy recette rollback`.
+État : `sudo -u deploy sudo netmobile-deploy recette status`.
+
+---
+
 # Déploiement en production
 
 ## Serveur requis

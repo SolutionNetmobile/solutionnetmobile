@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# =============================================================================
+# netmobile-deploy — déploiement de Solution Netmobile par le serveur
+# (même principe que privatevtc-deploy).
+#
+#   netmobile-deploy <env> deploy [<sha>]   déploie la tête de la branche de l'environnement
+#   netmobile-deploy <env> rollback         revient à la release précédente
+#   netmobile-deploy <env> status           affiche la release en ligne et les releases conservées
+#
+# Installé dans /usr/local/bin, exécuté en root via sudo (sudoers limité à ce script).
+# Le code est lu par le serveur depuis GitHub : rien n'est envoyé par GitHub Actions.
+# =============================================================================
+set -Eeuo pipefail
+
+ENV_NAME="${1:-}"
+ACTION="${2:-}"
+EXPECTED_SHA="${3:-}"
+
+REPO_URL="https://github.com/SolutionNetmobile/solutionnetmobile.git"
+PHP_VERSION="${NETMOBILE_PHP_VERSION:-8.5}"
+KEEP_RELEASES=5
+
+# Correspondance environnement → branche / domaine / utilisateur, figée ici.
+case "$ENV_NAME" in
+  recette)
+    BRANCH="recette"
+    DOMAIN="recette.solution-netmobile.fr"
+    ;;
+  *)
+    echo "Environnement inconnu : '${ENV_NAME}' (attendu : recette)" >&2
+    exit 2
+    ;;
+esac
+
+BASE="/var/www/netmobile/${ENV_NAME}"
+APP_USER="netmobile-${ENV_NAME}"
+REPO_DIR="${BASE}/repo.git"
+SHARED="${BASE}/shared"
+RELEASES="${BASE}/releases"
+BACKUPS="${BASE}/backups"
+CURRENT="${BASE}/current"
+LOCK="/run/lock/netmobile-${ENV_NAME}.lock"
+PHP="/usr/bin/php${PHP_VERSION}"
+
+log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+fail() { log "ÉCHEC : $*"; exit 1; }
+as_app() { sudo -u "$APP_USER" -H --preserve-env=COMPOSER_HOME,npm_config_cache "$@"; }
+
+export COMPOSER_HOME="${BASE}/.composer"
+export npm_config_cache="${BASE}/.npm"
+
+[ "$(id -u)" -eq 0 ] || fail "à exécuter en root (sudo)."
+
+health_check() {
+  # $1 = URL complète ; la requête vise le serveur local (vhost en ligne)
+  local url="$1" code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+    --resolve "${DOMAIN}:443:127.0.0.1" "$url" || true)
+  [ "$code" = "200" ]
+}
+
+release_health_check() {
+  # Démarre la nouvelle release sur un port local temporaire (sans la mettre en ligne)
+  local release="$1" port=18$((RANDOM % 900 + 100)) pid ok=1
+  as_app bash -c "cd '$release' && exec '$PHP' -S 127.0.0.1:${port} -t public public/index.php" >/dev/null 2>&1 &
+  pid=$!
+  sleep 2
+  for path in /up /; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:${port}${path}" || true)
+    log "  contrôle de la nouvelle release ${path} : HTTP ${code}"
+    [ "$code" = "200" ] || ok=0
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  [ "$ok" = "1" ]
+}
+
+activate() {
+  ln -sfn "$1" "${BASE}/current.tmp"
+  mv -Tf "${BASE}/current.tmp" "$CURRENT"
+  systemctl reload "php${PHP_VERSION}-fpm"
+}
+
+status() {
+  echo "Environnement : ${ENV_NAME} (${DOMAIN}, branche ${BRANCH})"
+  echo "En ligne     : $(readlink -f "$CURRENT" 2>/dev/null || echo 'aucune')"
+  echo "Releases     :"
+  ls -1t "$RELEASES" 2>/dev/null | sed 's/^/  /'
+}
+
+rollback() {
+  local current previous
+  current=$(readlink -f "$CURRENT")
+  previous=$(ls -1dt "$RELEASES"/* | grep -vx "$current" | head -1 || true)
+  [ -n "$previous" ] || fail "aucune release précédente."
+  log "Retour à $(basename "$previous")"
+  activate "$previous"
+  as_app "$PHP" "$previous/artisan" optimize >/dev/null
+  log "Retour arrière effectué (la base n'est pas restaurée ; sauvegardes dans ${BACKUPS})."
+}
+
+deploy() {
+  install -d -o "$APP_USER" -g www-data -m 750 "$RELEASES" "$BACKUPS" "$COMPOSER_HOME" "$npm_config_cache"
+
+  # 1. Récupération de la branche
+  if [ ! -d "$REPO_DIR" ]; then
+    as_app git clone --quiet --bare "$REPO_URL" "$REPO_DIR"
+  fi
+  as_app git --git-dir="$REPO_DIR" fetch --quiet --prune origin "+refs/heads/${BRANCH}:refs/heads/${BRANCH}"
+  local sha
+  sha=$(as_app git --git-dir="$REPO_DIR" rev-parse "refs/heads/${BRANCH}")
+  if [ -n "$EXPECTED_SHA" ]; then
+    as_app git --git-dir="$REPO_DIR" merge-base --is-ancestor "$EXPECTED_SHA" "$sha" \
+      || fail "le commit ${EXPECTED_SHA} n'appartient pas à la branche ${BRANCH}."
+  fi
+
+  local name release
+  name="$(date '+%Y%m%d-%H%M%S')-${sha:0:8}"
+  release="${RELEASES}/${name}"
+  log "Nouvelle release ${name} (branche ${BRANCH})"
+  as_app mkdir -p "$release"
+  as_app bash -c "git --git-dir='$REPO_DIR' archive '$sha' | tar -x -C '$release'"
+
+  # 2. Fichiers partagés (.env et storage persistent entre les releases)
+  [ -f "${SHARED}/.env" ] || fail "${SHARED}/.env manquant (voir install-recette.sh)."
+  if [ ! -d "${SHARED}/storage" ]; then
+    as_app cp -a "${release}/storage" "${SHARED}/storage"
+  fi
+  as_app mkdir -p "${SHARED}/storage/app/public" "${SHARED}/storage/framework/"{cache/data,sessions,views} "${SHARED}/storage/logs"
+  rm -rf "${release}/storage"
+  as_app ln -s "${SHARED}/storage" "${release}/storage"
+  as_app ln -s "${SHARED}/.env" "${release}/.env"
+
+  # 3. Dépendances et assets
+  log "Composer"
+  as_app bash -c "cd '$release' && '$PHP' '$(command -v composer)' install --no-dev --optimize-autoloader --no-interaction --no-progress --quiet"
+  log "Assets (npm ci + build)"
+  as_app bash -c "cd '$release' && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent && rm -rf node_modules"
+
+  # 4. Clé d'application au premier déploiement
+  if ! grep -qE '^APP_KEY=base64:' "${SHARED}/.env"; then
+    log "Génération de APP_KEY"
+    as_app "$PHP" "$release/artisan" key:generate --force --no-interaction
+  fi
+
+  # 5. Sauvegarde de la base puis migrations
+  if [ -L "$CURRENT" ]; then
+    log "Sauvegarde de la base"
+    # shellcheck disable=SC1091
+    set -a; . <(grep -E '^DB_(DATABASE|USERNAME|PASSWORD|HOST|PORT)=' "${SHARED}/.env" | sed 's/"//g'); set +a
+    MYSQL_PWD="$DB_PASSWORD" mariadb-dump --single-transaction --quick -h "${DB_HOST:-127.0.0.1}" -P "${DB_PORT:-3306}" \
+      -u "$DB_USERNAME" "$DB_DATABASE" | gzip > "${BACKUPS}/avant-${name}.sql.gz"
+    ls -1t "$BACKUPS"/avant-*.sql.gz | tail -n +11 | xargs -r rm -f
+  fi
+  log "Migrations"
+  as_app "$PHP" "$release/artisan" migrate --force --no-interaction
+  if [ ! -f "${SHARED}/.seeded" ]; then
+    log "Données initiales (premier déploiement)"
+    as_app "$PHP" "$release/artisan" db:seed --force --no-interaction
+    as_app touch "${SHARED}/.seeded"
+  else
+    as_app "$PHP" "$release/artisan" db:seed --class=RolesAndPermissionsSeeder --force --no-interaction
+  fi
+
+  # 6. Liens et caches
+  as_app "$PHP" "$release/artisan" storage:link --force >/dev/null
+  as_app "$PHP" "$release/artisan" optimize >/dev/null
+  as_app "$PHP" "$release/artisan" filament:optimize >/dev/null
+  chmod -R g+rX "$release"
+
+  # 7. Contrôle de santé AVANT mise en ligne
+  log "Contrôle de santé de la nouvelle release"
+  release_health_check "$release" || fail "la nouvelle release ne répond pas : la version en ligne n'a pas été modifiée."
+
+  # 8. Bascule atomique
+  local previous=""
+  [ -L "$CURRENT" ] && previous=$(readlink -f "$CURRENT")
+  log "Mise en ligne"
+  activate "$release"
+
+  # 9. Contrôle public, retour automatique en cas d'échec
+  if health_check "https://${DOMAIN}/up"; then
+    log "Contrôle public OK"
+  else
+    if [ -n "$previous" ]; then
+      log "Contrôle public en échec : retour à $(basename "$previous")"
+      activate "$previous"
+    fi
+    fail "https://${DOMAIN}/up ne répond pas 200."
+  fi
+
+  # 10. Nettoyage : 5 dernières releases (jamais l'actuelle ni la précédente)
+  ls -1dt "$RELEASES"/* | tail -n +$((KEEP_RELEASES + 1)) | while read -r old; do
+    [ "$old" = "$release" ] || [ "$old" = "$previous" ] || rm -rf "$old"
+  done
+
+  log "Déploiement terminé : ${name}"
+}
+
+exec 9>"$LOCK"
+flock -n 9 || fail "un déploiement ${ENV_NAME} est déjà en cours."
+
+case "$ACTION" in
+  deploy) deploy ;;
+  rollback) rollback ;;
+  status) status ;;
+  *) echo "Usage : netmobile-deploy <recette> <deploy [sha]|rollback|status>" >&2; exit 2 ;;
+esac
