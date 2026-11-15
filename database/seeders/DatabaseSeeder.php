@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use Faker\Factory;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
@@ -21,7 +22,8 @@ class DatabaseSeeder extends Seeder
             PageSeeder::class,
         ]);
 
-        if (! app()->isProduction()) {
+        // Demo prospects rely on Faker, a dev dependency absent from servers (composer install --no-dev).
+        if (! app()->isProduction() && class_exists(Factory::class)) {
             $this->call(DemoContactSeeder::class);
         }
     }
