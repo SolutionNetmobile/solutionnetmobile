@@ -52,11 +52,17 @@ export npm_config_cache="${BASE}/.npm"
 [ "$(id -u)" -eq 0 ] || fail "à exécuter en root (sudo)."
 
 health_check() {
-  # $1 = URL complète ; la requête vise le serveur local (vhost en ligne)
-  local url="$1" code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-    --resolve "${DOMAIN}:443:127.0.0.1" "$url" || true)
-  [ "$code" = "200" ]
+  # $1 = URL complète ; la requête vise le serveur local (vhost en ligne).
+  # Plusieurs essais : PHP-FPM vient d'être rechargé.
+  local url="$1" code attempt
+  for attempt in 1 2 3 4 5; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+      --resolve "${DOMAIN}:443:127.0.0.1" "$url" || true)
+    log "  contrôle public ${url} (essai ${attempt}) : HTTP ${code}"
+    [ "$code" = "200" ] && return 0
+    sleep 2
+  done
+  return 1
 }
 
 release_health_check() {
