@@ -125,15 +125,7 @@ fi
 
 log "Certificat Let's Encrypt"
 VHOST="/etc/nginx/sites-available/netmobile-${ENV_NAME}.conf"
-install -d -m 755 /var/www/letsencrypt
-CERT_DOMAINS=(-d "$DOMAIN")
-for extra in $EXTRA_DOMAINS; do
-  if getent hosts "$extra" >/dev/null; then
-    CERT_DOMAINS+=(-d "$extra")
-  else
-    echo "Attention : ${extra} ne résout pas (DNS), il n'est pas ajouté au certificat."
-  fi
-done
+install -d -m 755 /var/www/letsencrypt/.well-known/acme-challenge
 if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
   # Vhost HTTP minimal le temps d'obtenir le certificat
   cat > "$VHOST" <<NGINX
@@ -148,6 +140,29 @@ NGINX
   ln -sfn "$VHOST" "/etc/nginx/sites-enabled/netmobile-${ENV_NAME}.conf"
   nginx -t && systemctl reload nginx
 fi
+
+# Le DNS pointe-t-il vers ce serveur ? Un jeton est déposé puis relu par HTTP
+# (fiable même derrière une IP publique NATée).
+TOKEN="netmobile-$(openssl rand -hex 8)"
+echo "$TOKEN" > "/var/www/letsencrypt/.well-known/acme-challenge/${TOKEN}"
+points_here() {
+  [ "$(curl -s --max-time 10 "http://$1/.well-known/acme-challenge/${TOKEN}" || true)" = "$TOKEN" ]
+}
+if ! points_here "$DOMAIN"; then
+  rm -f "/var/www/letsencrypt/.well-known/acme-challenge/${TOKEN}"
+  echo "Le DNS de ${DOMAIN} ne pointe pas vers ce serveur : certificat impossible. Modifier le DNS puis relancer." >&2
+  exit 1
+fi
+CERT_DOMAINS=(-d "$DOMAIN")
+for extra in $EXTRA_DOMAINS; do
+  if points_here "$extra"; then
+    CERT_DOMAINS+=(-d "$extra")
+  else
+    echo "Attention : ${extra} ne pointe pas vers ce serveur, il n'est pas ajouté au certificat (relancer après correction du DNS)."
+  fi
+done
+rm -f "/var/www/letsencrypt/.well-known/acme-challenge/${TOKEN}"
+
 # --expand ajoute un domaine (ex. www) à un certificat existant ; sans effet sinon
 certbot certonly --webroot -w /var/www/letsencrypt --cert-name "$DOMAIN" "${CERT_DOMAINS[@]}" \
   --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring --expand
