@@ -36,7 +36,7 @@ Un push sur `recette` lance `.github/workflows/deploy-recette.yml` :
 
 ```bash
 git clone --branch recette https://github.com/SolutionNetmobile/solutionnetmobile.git /tmp/netmobile
-sudo bash /tmp/netmobile/deploy/server/install-recette.sh
+sudo bash /tmp/netmobile/deploy/server/install.sh recette
 ```
 
 Le script :
@@ -60,9 +60,49 @@ git checkout recette && git merge --ff-only dev && git push origin recette
 Retour arrière : `sudo -u deploy sudo netmobile-deploy recette rollback`.
 État : `sudo -u deploy sudo netmobile-deploy recette status`.
 
+## Production — https://solution-netmobile.fr
+
+Même serveur et même mécanisme que la recette, avec des ressources dédiées.
+
+| Élément | Valeur |
+|---|---|
+| Branche | `prod` |
+| Domaine | `solution-netmobile.fr` (`www.solution-netmobile.fr` redirigé vers le domaine nu) |
+| Répertoire | `/var/www/netmobile/prod` |
+| Utilisateur système / pool PHP-FPM | `netmobile-prod` (`/run/php/netmobile-prod.sock`) |
+| Base MariaDB | `solution_netmobile_prod` (utilisateur `netmobile_prod`) |
+| Accès | public, indexable, `APP_ENV=production` |
+| Workflow | `.github/workflows/deploy-prod.yml`, environnement GitHub `prod`, variable `DEPLOY_PROD_ENABLED` |
+
+### Installation sur le serveur (une seule fois)
+
+Prérequis : les enregistrements DNS `solution-netmobile.fr` et `www.solution-netmobile.fr` pointent vers le serveur
+(sinon le certificat Let's Encrypt ne peut pas être obtenu ; `www` est ignoré s'il ne résout pas).
+
+```bash
+git clone --branch prod https://github.com/SolutionNetmobile/solutionnetmobile.git /tmp/netmobile-prod
+sudo bash /tmp/netmobile-prod/deploy/server/install.sh prod
+```
+
+Il reste ensuite à :
+
+1. compléter les réglages SMTP (`MAIL_*`) dans `/var/www/netmobile/prod/shared/.env` ;
+2. dans GitHub, créer l'environnement **prod** (branche autorisée : `prod`) et y ajouter les secrets `SSH_HOST`, `SSH_KNOWN_HOSTS` et `SSH_PRIVATE_KEY` affichés par le script. Supprimer ensuite la clé privée du serveur ;
+3. créer la variable de dépôt `DEPLOY_PROD_ENABLED` = `true` ;
+4. suivre la liste « Avant la mise en ligne » ci-dessous.
+
+### Publier
+
+```bash
+git checkout prod && git merge --ff-only recette && git push origin prod
+```
+
+Retour arrière : `sudo -u deploy sudo netmobile-deploy prod rollback`.
+État : `sudo -u deploy sudo netmobile-deploy prod status`.
+
 ---
 
-# Déploiement en production
+# Déploiement manuel (autre serveur)
 
 ## Serveur requis
 
@@ -87,7 +127,7 @@ GRANT ALL PRIVILEGES ON solution_netmobile.* TO 'netmobile'@'localhost';
 APP_NAME="Solution Netmobile"
 APP_ENV=production
 APP_DEBUG=false
-APP_URL=https://www.solution-netmobile.fr
+APP_URL=https://solution-netmobile.fr
 
 DB_CONNECTION=mariadb
 DB_HOST=127.0.0.1
@@ -155,7 +195,7 @@ La purge RGPD (`contacts:purge`) est planifiée chaque nuit. Ajoutez une seule e
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name www.solution-netmobile.fr;
+    server_name solution-netmobile.fr;
     root /var/www/solution-netmobile/public;
     index index.php;
 
@@ -214,4 +254,4 @@ php artisan up
 3. *Clients & références* : remplacer les 4 logos de démonstration.
 4. *Pages* : compléter l'hébergeur dans les Mentions légales, relire la Politique de confidentialité.
 5. Envoyer une demande test depuis le formulaire et vérifier la réception de l'e-mail.
-6. Déclarer `https://www.solution-netmobile.fr/sitemap.xml` dans Google Search Console.
+6. Déclarer `https://solution-netmobile.fr/sitemap.xml` dans Google Search Console.

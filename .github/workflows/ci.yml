@@ -1,11 +1,11 @@
 # Contrôle qualité : formatage, tests (MariaDB) et construction des assets.
-# Lancé à chaque push sur dev / prod et sur chaque pull request. Pour la branche recette,
-# c'est le workflow de déploiement qui l'appelle avant de publier.
+# Lancé à chaque push sur dev et sur chaque pull request. Pour les branches recette et prod,
+# ce sont les workflows de déploiement qui l'appellent avant de publier.
 name: CI
 
 on:
   push:
-    branches: [dev, prod]
+    branches: [dev]
   pull_request:
   workflow_call:
 

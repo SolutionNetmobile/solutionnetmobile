@@ -1,0 +1,78 @@
+# Déploiement de la PRODUCTION (https://solution-netmobile.fr) à chaque push sur la branche « prod ».
+#
+# Même principe que la recette : le serveur récupère lui-même la branche « prod » depuis GitHub
+# et la déploie (script netmobile-deploy, voir deploy/server/). Aucun code n'est envoyé par ce workflow.
+# La clé SSH utilisée est bridée côté serveur : elle ne peut déclencher QUE le déploiement de la production.
+#
+# Activation (une fois) : voir docs/DEPLOIEMENT.md § « Production ».
+#   - environnement GitHub « prod » (branche autorisée : prod) avec les secrets
+#     SSH_HOST, SSH_PRIVATE_KEY et SSH_KNOWN_HOSTS
+#   - variable de dépôt DEPLOY_PROD_ENABLED = true (sinon seuls les tests s'exécutent)
+name: Déploiement production
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un seul déploiement production à la fois (le serveur pose aussi un verrou)
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Déployer en production
+    needs: tests
+    if: vars.DEPLOY_PROD_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: prod
+      url: https://solution-netmobile.fr
+
+    steps:
+      - name: Vérifier la branche
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/prod" ]; then
+            echo "::error::Ce workflow ne déploie que la branche prod (reçu : ${GITHUB_REF})"
+            exit 1
+          fi
+
+      - name: Clé SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Déployer (build, migrations, contrôle de santé, bascule)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "deploy@${SSH_HOST}" "deploy ${GITHUB_SHA}"
+
+      - name: Contrôle public
+        run: |
+          URL=https://solution-netmobile.fr
+          for path in /up /; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$URL$path")
+            echo "$path : HTTP $code (attendu 200)"
+            [ "$code" = "200" ] || { echo "::error::$URL$path ne répond pas 200"; exit 1; }
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://solution-netmobile.fr/")
+          echo "HTTP → HTTPS : $code (attendu 301)"
+          [ "$code" = "301" ] || { echo "::error::http://solution-netmobile.fr ne redirige pas vers HTTPS"; exit 1; }
+
+      - name: Nettoyage
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

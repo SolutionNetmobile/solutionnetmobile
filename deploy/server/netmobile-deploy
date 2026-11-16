@@ -26,8 +26,12 @@ case "$ENV_NAME" in
     BRANCH="recette"
     DOMAIN="recette.solution-netmobile.fr"
     ;;
+  prod)
+    BRANCH="prod"
+    DOMAIN="solution-netmobile.fr"
+    ;;
   *)
-    echo "Environnement inconnu : '${ENV_NAME}' (attendu : recette)" >&2
+    echo "Environnement inconnu : '${ENV_NAME}' (attendu : recette ou prod)" >&2
     exit 2
     ;;
 esac
@@ -128,7 +132,7 @@ deploy() {
   as_app bash -c "git --git-dir='$REPO_DIR' archive '$sha' | tar -x -C '$release'"
 
   # 2. Fichiers partagés (.env et storage persistent entre les releases)
-  [ -f "${SHARED}/.env" ] || fail "${SHARED}/.env manquant (voir install-recette.sh)."
+  [ -f "${SHARED}/.env" ] || fail "${SHARED}/.env manquant (voir install.sh)."
   if [ ! -d "${SHARED}/storage" ]; then
     as_app cp -a "${release}/storage" "${SHARED}/storage"
   fi
@@ -210,5 +214,5 @@ case "$ACTION" in
   deploy) deploy ;;
   rollback) rollback ;;
   status) status ;;
-  *) echo "Usage : netmobile-deploy <recette> <deploy [sha]|rollback|status>" >&2; exit 2 ;;
+  *) echo "Usage : netmobile-deploy <recette|prod> <deploy [sha]|rollback|status>" >&2; exit 2 ;;
 esac

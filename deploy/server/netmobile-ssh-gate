@@ -4,6 +4,7 @@
 #
 # authorized_keys de l'utilisateur deploy :
 #   restrict,command="/usr/local/bin/netmobile-ssh-gate recette" ssh-ed25519 AAAA… gha_netmobile_recette
+#   restrict,command="/usr/local/bin/netmobile-ssh-gate prod" ssh-ed25519 AAAA… gha_netmobile_prod
 #
 # La clé ne peut lancer que deploy / rollback / status de SON environnement.
 # =============================================================================
@@ -13,7 +14,7 @@ ENV_NAME="${1:-}"
 read -r -a ARGS <<< "${SSH_ORIGINAL_COMMAND:-}"
 
 case "$ENV_NAME" in
-  recette) ;;
+  recette|prod) ;;
   *) echo "Environnement non autorisé." >&2; exit 2 ;;
 esac
 
