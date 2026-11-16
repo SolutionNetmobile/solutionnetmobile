@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Reads and writes the editable site settings stored in `site_settings`.
- * Values are cached and fall back to config('site.defaults').
+ * Values are cached and fall back to config('site.defaults') when never saved.
  */
 class SettingsService
 {
@@ -17,14 +17,18 @@ class SettingsService
     /**
      * @var array<string, string|null>|null
      */
-    private ?array $loaded = null;
+    private ?array $stored = null;
 
+    /**
+     * A setting saved from the back office wins, even when cleared; the
+     * config default only applies to settings that were never saved.
+     */
     public function get(string $key, mixed $default = null): mixed
     {
-        $values = $this->all();
+        $stored = $this->stored();
 
-        if (array_key_exists($key, $values) && filled($values[$key])) {
-            return $values[$key];
+        if (array_key_exists($key, $stored)) {
+            return filled($stored[$key]) ? $stored[$key] : $default;
         }
 
         return $default ?? $this->defaults()[$key] ?? null;
@@ -72,10 +76,7 @@ class SettingsService
      */
     public function all(): array
     {
-        return $this->loaded ??= array_merge(
-            $this->defaults(),
-            Cache::rememberForever(self::CACHE_KEY, fn (): array => SiteSetting::query()->pluck('value', 'key')->all()),
-        );
+        return array_merge($this->defaults(), $this->stored());
     }
 
     /**
@@ -114,7 +115,20 @@ class SettingsService
     public function flush(): void
     {
         Cache::forget(self::CACHE_KEY);
-        $this->loaded = null;
+        $this->stored = null;
+    }
+
+    /**
+     * Values saved in the database, keyed by setting name.
+     *
+     * @return array<string, string|null>
+     */
+    private function stored(): array
+    {
+        return $this->stored ??= Cache::rememberForever(
+            self::CACHE_KEY,
+            fn (): array => SiteSetting::query()->pluck('value', 'key')->all(),
+        );
     }
 
     /**

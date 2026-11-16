@@ -46,6 +46,21 @@ class SettingsTest extends TestCase
             ->assertSee('Parlons de votre projet !');
     }
 
+    public function test_cleared_phone_is_no_longer_displayed(): void
+    {
+        $this->seed(SiteSettingSeeder::class);
+        $this->actingAsRole(Role::Admin);
+
+        Livewire::test(ManageSiteSettings::class)
+            ->fillForm(['contact_phone' => null])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertNull(app(SettingsService::class)->get('contact_phone'));
+
+        $this->get('/')->assertDontSee('href="tel:', false);
+    }
+
     public function test_invalid_settings_are_rejected(): void
     {
         $this->seed(SiteSettingSeeder::class);
